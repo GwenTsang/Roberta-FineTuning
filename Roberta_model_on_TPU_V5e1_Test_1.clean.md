@@ -39,7 +39,6 @@ La cellule suivante fait le fine-tuning. Elle s'est exécutée intégralement en
 ================================================================================
 Fine-tune RoBERTa-base for Sequence Classification (SST-2) on TPU v5e
 ================================================================================
-  • bfloat16 via XLA_USE_BF16 (TPU v5e native precision)
   • Fixed-length tokenization → static XLA graph (no recompilation)
   • drop_last=True on DataLoaders → uniform batch shape every step
   • MpDeviceLoader for asynchronous host-to-device data prefetch
@@ -186,8 +185,7 @@ model = RobertaForSequenceClassification.from_pretrained(
     MODEL_NAME,
     num_labels=2,        # SST-2 is binary
 )
-# Move model to TPU.  With XLA_USE_BF16=1, the float32 weights are
-# transparently computed in bfloat16 by the XLA compiler on TPU.
+# the float32 weights are
 model = model.to(device)
 model.train()
 
@@ -228,7 +226,6 @@ print(f"  Total steps       : {total_steps}")
 print(f"  Warmup steps      : {warmup_steps}")
 print(f"  Learning rate     : {LEARNING_RATE}")
 print(f"  Weight decay      : {WEIGHT_DECAY}")
-print(f"  Precision         : bfloat16 (via XLA_USE_BF16)")
 print(f"  Device            : {device}")
 
 global_step    = 0
@@ -357,12 +354,10 @@ with torch.no_grad():
 results = metric.compute()
 eval_elapsed = time.time() - eval_start
 
-print(f"\n{'=' * 70}")
 print(f"  EVALUATION RESULTS (GLUE/{TASK_NAME})")
 print(f"{'=' * 70}")
 print(f"  Accuracy : {results['accuracy']:.4f}")
 print(f"  Eval time: {eval_elapsed:.1f}s")
-print(f"{'=' * 70}\n")
 
 # SAVE MODEL
 SAVE_DIR = "./roberta-sst2-finetuned"
@@ -426,7 +421,6 @@ Notes:
   Warmup steps      : 94
   Learning rate     : 3e-05
   Weight decay      : 0.01
-  Precision         : bfloat16 (via XLA_USE_BF16)
   Device            : xla:0
 ======================================================================
 
