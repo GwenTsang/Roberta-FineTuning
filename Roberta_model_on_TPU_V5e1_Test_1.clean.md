@@ -1,4 +1,6 @@
-cell
+# Notebook de fine-tuning d'un modèle RoBERTa
+
+
 ```python
 import os, psutil, platform, subprocess, textwrap, sys
 
@@ -25,9 +27,6 @@ Num devices: 1
 cell
 ```python
 !pip install evaluate>=0.4 -q
-```
-```output
-
 ```
 
 Tous les autres packages sont déjà pré-installés.
