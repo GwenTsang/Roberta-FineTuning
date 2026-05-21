@@ -29,7 +29,11 @@ cell
 ```output
 
 ```
-cell
+
+Tous les autres packages sont déjà pré-installés.
+La cellule suivante fait le fine-tuning. Elle s'est exécutée intégralement en 7 minutes.
+
+
 ```python
 #!/usr/bin/env python3
 """
