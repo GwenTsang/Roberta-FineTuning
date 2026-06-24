@@ -52,7 +52,7 @@ def env_str(name: str, default: str) -> str:
 @dataclass(frozen=True, slots=True)
 class Config:
     model_name: str = env_str("MODEL_NAME", "camembert-base")
-    tokenized_cache_dir: str = env_str("TOKENIZED_CACHE_DIR")
+    tokenized_cache_dir: str = env_str("TOKENIZED_CACHE_DIR", "")
     save_dir: str = "."  
     max_seq_length: int = env_int("MAX_SEQ_LENGTH", 128)
     batch_size: int = env_int("BATCH_SIZE", 248)
