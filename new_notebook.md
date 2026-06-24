@@ -272,7 +272,7 @@ def train() -> None:
             f"[Epoch {epoch}/{cfg.epochs}] "
             f"loss={avg_loss:.4f} "
             f"ppl={math.exp(min(avg_loss, 20.0)):.2f} "
-            f"time={format_seconds(epoch_seconds)} "
+            f"time={epoch_seconds:.2f}s "
             f"throughput={examples_per_second:.0f} ex/s"
         )
 
