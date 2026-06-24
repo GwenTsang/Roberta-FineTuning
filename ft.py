@@ -59,7 +59,7 @@ class Config:
     )
     save_dir: str = "."  
     max_seq_length: int = env_int("MAX_SEQ_LENGTH", 128)
-    batch_size: int = env_int("BATCH_SIZE", 320)
+    batch_size: int = env_int("BATCH_SIZE", 248)
     epochs: int = env_int("NUM_EPOCHS", 3)
 
     learning_rate: float = env_float("LEARNING_RATE", 5e-5)
