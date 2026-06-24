@@ -53,10 +53,6 @@ def env_str(name: str, default: str) -> str:
 class Config:
     model_name: str = env_str("MODEL_NAME", "camembert-base")
     tokenized_cache_dir: str = env_str("TOKENIZED_CACHE_DIR", "./tokenized_cache")
-    save_dir: str = env_str(
-        "SAVE_DIR",
-        "./camembert-base-french-comments-tweets-mlm-xla-fast",
-    )
     save_dir: str = "."  
     max_seq_length: int = env_int("MAX_SEQ_LENGTH", 128)
     batch_size: int = env_int("BATCH_SIZE", 248)
