@@ -1,3 +1,38 @@
+Cette pipeline avec deux scripts proposés a été explicitement conçue **pour minimiser le temps d'exécution*** .
+
+
+- On utilise une taille fixe car , a priori , le TPU élabore un graphe de compilation au début et n'a pas besoin de le re-générer ensuite.
+- On utilise `os.environ.setdefault("XLA_NO_SPECIAL_SCALARS", "1")` comme c'est conseillé 
+
+
+Sur colab - au moment où j'écris ces lignes - on a accès à un environnement TPU valide pendant 2 heures et avec cette config :
+
+
+```py
+import os, psutil, platform, subprocess, textwrap, sys
+
+print("Python:", sys.version)
+print("Platform:", platform.platform())
+print("CPU cores:", os.cpu_count())
+print("RAM (GB):", round(psutil.virtual_memory().total / (1024**3), 2))
+
+import jax
+devs = jax.devices()
+print("JAX devices:", devs)
+print("Num devices:", len(devs))
+```
+
+```txt
+Python: 3.12.13 (main, Mar  4 2026, 09:23:07) [GCC 11.4.0]
+Platform: Linux-6.6.122+-x86_64-with-glibc2.35
+CPU cores: 24
+RAM (GB): 47.05
+/usr/local/lib/python3.12/dist-packages/jax/_src/cloud_tpu_init.py:86: UserWarning: Transparent hugepages are not enabled. TPU runtime startup and shutdown time should be significantly improved on TPU v5e and newer. If not already set, you may need to enable transparent hugepages in your VM image (sudo sh -c "echo always > /sys/kernel/mm/transparent_hugepage/enabled")
+  warnings.warn(
+JAX devices: [TpuDevice(id=0, process_index=0, coords=(0,0,0), core_on_chip=0)]
+Num devices: 1
+```
+
 ```py
 import kagglehub
 import os
@@ -275,3 +310,4 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 ```
+
