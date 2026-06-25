@@ -11,6 +11,7 @@ import warnings
 from pathlib import Path
 
 os.environ.setdefault("PJRT_DEVICE", "TPU")
+os.environ.setdefault("XLA_NO_SPECIAL_SCALARS", "1")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
