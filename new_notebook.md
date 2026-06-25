@@ -1,21 +1,13 @@
 ```py
 import kagglehub
 import os
-dataset_path = kagglehub.dataset_download("gwendaltsang/tokenized-dataset/versions/3")
-os.environ["TOKENIZED_CACHE_DIR"] = dataset_path
+os.environ["TOKENIZED_CACHE_DIR"] = kagglehub.dataset_download("gwendaltsang/tokenized-dataset/versions/3")
 ```
 
 ```py
-#!/usr/bin/env python3
-"""
-Single-core TPU v5e CamemBERT MLM fine-tuning.
-"""
-
-import math
 import os
-import random
 import time
-from dataclasses import dataclass
+import warnings
 from pathlib import Path
 
 os.environ.setdefault("PJRT_DEVICE", "TPU")
@@ -24,7 +16,17 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
 
-import numpy as np
+warnings.filterwarnings(
+    "ignore",
+    message=r"Transparent hugepages are not enabled\..*",
+    category=UserWarning,
+    module=r"jax\._src\.cloud_tpu_init",
+)
+
+SCRIPT_START = time.perf_counter()
+BACKUP_AFTER_SECONDS = 6590
+EPOCHS = 1
+
 import torch
 from datasets import load_from_disk
 from torch.utils.data import DataLoader
@@ -48,39 +50,27 @@ def env_str(name: str, default: str) -> str:
     return os.getenv(name, default)
 
 
-@dataclass(frozen=True, slots=True)
-class Config:
-    model_name: str = env_str("MODEL_NAME", "camembert-base")
-    tokenized_cache_dir: str = env_str("TOKENIZED_CACHE_DIR", "")
-    save_dir: str = "/content/drive/MyDrive"  
-    max_seq_length: int = env_int("MAX_SEQ_LENGTH", 128)
-    batch_size: int = env_int("BATCH_SIZE", 248)
-    epochs: int = env_int("NUM_EPOCHS", 1)
+MODEL_NAME = env_str("MODEL_NAME", "camembert-base")
+TOKENIZED_CACHE_DIR = env_str("TOKENIZED_CACHE_DIR", "")
+SAVE_DIR = "/content/drive/MyDrive"
 
-    learning_rate: float = env_float("LEARNING_RATE", 5e-5)
-    weight_decay: float = env_float("WEIGHT_DECAY", 0.01)
-    warmup_ratio: float = env_float("WARMUP_RATIO", 0.01)
-    max_grad_norm: float = env_float("MAX_GRAD_NORM", 1.0)
-    mlm_probability: float = env_float("MLM_PROBABILITY", 0.15)
+BATCH_SIZE = env_int("BATCH_SIZE", 256)
+LEARNING_RATE = env_float("LEARNING_RATE", 5e-5)
+WEIGHT_DECAY = env_float("WEIGHT_DECAY", 0.01)
+WARMUP_RATIO = env_float("WARMUP_RATIO", 0.01)
+MAX_GRAD_NORM = env_float("MAX_GRAD_NORM", 1.0)
+MLM_PROBABILITY = env_float("MLM_PROBABILITY", 0.15)
 
-    seed: int = env_int("SEED", 11)
+DATALOADER_WORKERS = env_int("DATALOADER_NUM_WORKERS", 16)
+PREFETCH_FACTOR = env_int("PREFETCH_FACTOR", 8)
+TORCH_NUM_THREADS = env_int("TORCH_NUM_THREADS", 4)
 
-    dataloader_workers: int = env_int("DATALOADER_NUM_WORKERS", 16)
-    prefetch_factor: int = env_int("PREFETCH_FACTOR", 8)
-    torch_num_threads: int = env_int("TORCH_NUM_THREADS", 4)
-
-    xla_loader_prefetch_size: int = env_int("XLA_LOADER_PREFETCH_SIZE", 32)
-    xla_device_prefetch_size: int = env_int("XLA_DEVICE_PREFETCH_SIZE", 16)
-    xla_transfer_threads: int = env_int("XLA_TRANSFER_THREADS", 4)
+XLA_LOADER_PREFETCH_SIZE = env_int("XLA_LOADER_PREFETCH_SIZE", 32)
+XLA_DEVICE_PREFETCH_SIZE = env_int("XLA_DEVICE_PREFETCH_SIZE", 16)
+XLA_TRANSFER_THREADS = env_int("XLA_TRANSFER_THREADS", 4)
 
 
-def seed_everything(seed: int) -> None:
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-
-
-def make_optimizer(model: torch.nn.Module, cfg: Config) -> torch.optim.Optimizer:
+def make_optimizer(model: torch.nn.Module) -> torch.optim.Optimizer:
     no_decay = ("bias", "LayerNorm.weight", "layer_norm.weight")
 
     decay_params = [
@@ -96,10 +86,10 @@ def make_optimizer(model: torch.nn.Module, cfg: Config) -> torch.optim.Optimizer
 
     return syncfree.AdamW(
         [
-            {"params": decay_params, "weight_decay": cfg.weight_decay},
+            {"params": decay_params, "weight_decay": WEIGHT_DECAY},
             {"params": nodecay_params, "weight_decay": 0.0},
         ],
-        lr=cfg.learning_rate,
+        lr=LEARNING_RATE,
         betas=(0.9, 0.999),
         eps=1e-6,
     )
@@ -108,9 +98,8 @@ def make_optimizer(model: torch.nn.Module, cfg: Config) -> torch.optim.Optimizer
 def make_scheduler(
     optimizer: torch.optim.Optimizer,
     total_steps: int,
-    warmup_ratio: float,
 ) -> torch.optim.lr_scheduler.LambdaLR:
-    warmup_steps = int(total_steps * warmup_ratio)
+    warmup_steps = int(total_steps * WARMUP_RATIO)
 
     def lr_lambda(step: int) -> float:
         warmup = step / max(1, warmup_steps)
@@ -125,10 +114,9 @@ def make_mlm_batch(
     special_tokens_mask: torch.Tensor,
     mask_token_id: int,
     vocab_size: int,
-    mlm_probability: float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     rand_mask = torch.rand(input_ids.shape, device=input_ids.device)
-    masked = (rand_mask < mlm_probability) & ~special_tokens_mask.bool()
+    masked = (rand_mask < MLM_PROBABILITY) & ~special_tokens_mask.bool()
 
     labels = torch.where(masked, input_ids, torch.full_like(input_ids, -100))
 
@@ -158,19 +146,42 @@ def make_mlm_batch(
     return masked_input_ids, labels
 
 
-def train() -> None:
-    cfg = Config()
+def save_model_weights_checkpoint(
+    model: torch.nn.Module,
+    tokenizer: CamembertTokenizerFast,
+    checkpoint_dir: str | Path,
+) -> None:
+    checkpoint_dir = Path(checkpoint_dir)
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    seed_everything(cfg.seed)
-    torch.set_num_threads(cfg.torch_num_threads)
+    torch_xla.sync()
+
+    model_to_save = model.module if hasattr(model, "module") else model
+    cpu_state_dict = {
+        name: tensor.detach().cpu()
+        for name, tensor in model_to_save.state_dict().items()
+    }
+
+    model_to_save.save_pretrained(
+        str(checkpoint_dir),
+        state_dict=cpu_state_dict,
+        safe_serialization=True,
+    )
+    tokenizer.save_pretrained(str(checkpoint_dir))
+
+    del cpu_state_dict
+
+
+def train() -> None:
+    torch.set_num_threads(TORCH_NUM_THREADS)
 
     device = torch_xla.device()
 
-    tokenizer = CamembertTokenizerFast.from_pretrained(cfg.model_name)
+    tokenizer = CamembertTokenizerFast.from_pretrained(MODEL_NAME)
     mask_token_id = int(tokenizer.mask_token_id)
     vocab_size = int(tokenizer.vocab_size)
 
-    dataset = load_from_disk(str(Path(cfg.tokenized_cache_dir)))
+    dataset = load_from_disk(str(Path(TOKENIZED_CACHE_DIR)))
     dataset.set_format(
         type="torch",
         columns=["input_ids", "attention_mask", "special_tokens_mask"],
@@ -178,115 +189,82 @@ def train() -> None:
 
     train_loader = DataLoader(
         dataset,
-        batch_size=cfg.batch_size,
+        batch_size=BATCH_SIZE,
         shuffle=True,
         drop_last=True,
-        num_workers=cfg.dataloader_workers,
+        num_workers=DATALOADER_WORKERS,
         persistent_workers=True,
-        prefetch_factor=cfg.prefetch_factor,
+        prefetch_factor=PREFETCH_FACTOR,
     )
 
     model = CamembertForMaskedLM.from_pretrained(
-        cfg.model_name,
+        MODEL_NAME,
         use_safetensors=True,
     ).to(device)
     model.train()
 
-    optimizer = make_optimizer(model, cfg)
+    optimizer = make_optimizer(model)
 
     steps_per_epoch = len(train_loader)
-    total_steps = steps_per_epoch * cfg.epochs
-    scheduler = make_scheduler(optimizer, total_steps, cfg.warmup_ratio)
-
-    print(
-        "\n"
-        f"Model              : {cfg.model_name}\n"
-        f"Device             : {device}\n"
-        f"Epochs             : {cfg.epochs}\n"
-        f"Batch size         : {cfg.batch_size}\n"
-        f"Train examples     : {len(dataset):,}\n"
-        f"Steps / epoch      : {steps_per_epoch:,}\n"
-        f"Total steps        : {total_steps:,}\n"
-        f"Workers            : {cfg.dataloader_workers}\n"
-        f"Prefetch factor    : {cfg.prefetch_factor}\n"
-        f"XLA prefetch       : loader={cfg.xla_loader_prefetch_size}, "
-        f"device={cfg.xla_device_prefetch_size}, transfer={cfg.xla_transfer_threads}\n"
-        f"AMP                : torch.autocast('xla', dtype=torch.bfloat16)\n"
-    )
+    scheduler = make_scheduler(optimizer, steps_per_epoch * EPOCHS)
 
     xla_loader_kwargs = {
-        "loader_prefetch_size": cfg.xla_loader_prefetch_size,
-        "device_prefetch_size": cfg.xla_device_prefetch_size,
-        "host_to_device_transfer_threads": cfg.xla_transfer_threads,
+        "loader_prefetch_size": XLA_LOADER_PREFETCH_SIZE,
+        "device_prefetch_size": XLA_DEVICE_PREFETCH_SIZE,
+        "host_to_device_transfer_threads": XLA_TRANSFER_THREADS,
     }
-
-    global_step = 0
-    run_start = time.perf_counter()
 
     optimizer.zero_grad(set_to_none=True)
 
-    for epoch in range(1, cfg.epochs + 1):
-        epoch_start = time.perf_counter()
-        epoch_loss = torch.zeros((), device=device)
-
+    for _ in range(EPOCHS):
         device_loader = pl.MpDeviceLoader(
             train_loader,
             device,
             **xla_loader_kwargs,
         )
 
-        for batch in device_loader:
+        for step, batch in enumerate(device_loader, start=1):
             input_ids, labels = make_mlm_batch(
                 input_ids=batch["input_ids"],
                 special_tokens_mask=batch["special_tokens_mask"],
                 mask_token_id=mask_token_id,
                 vocab_size=vocab_size,
-                mlm_probability=cfg.mlm_probability,
             )
 
             with torch.autocast("xla", dtype=torch.bfloat16):
-                outputs = model(
+                loss = model(
                     input_ids=input_ids,
                     attention_mask=batch["attention_mask"],
                     labels=labels,
-                )
-                loss = outputs.loss
+                ).loss
 
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.max_grad_norm)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), MAX_GRAD_NORM)
+
             xm.optimizer_step(optimizer)
             scheduler.step()
             optimizer.zero_grad(set_to_none=True)
 
-            epoch_loss += loss.detach()
-            global_step += 1
+            if time.perf_counter() - SCRIPT_START >= BACKUP_AFTER_SECONDS:
+                save_model_weights_checkpoint(
+                    model=model,
+                    tokenizer=tokenizer,
+                    checkpoint_dir=SAVE_DIR,
+                )
+                print(
+                    f"[Backup 1h50] saved_dir={SAVE_DIR} "
+                    f"step={step}/{steps_per_epoch} "
+                    f"loss={float(loss.detach().cpu()):.6f}",
+                    flush=True,
+                )
+                return
 
-        torch_xla.sync()
-
-        avg_loss = (epoch_loss / steps_per_epoch).item()
-        epoch_seconds = time.perf_counter() - epoch_start
-        epoch_examples = steps_per_epoch * cfg.batch_size
-        examples_per_second = epoch_examples / max(epoch_seconds, 1e-9)
-
-        print(
-            f"[Epoch {epoch}/{cfg.epochs}] "
-            f"loss={avg_loss:.4f} "
-            f"ppl={math.exp(min(avg_loss, 20.0)):.2f} "
-            f"time={epoch_seconds:.2f}s "
-            f"throughput={examples_per_second:.0f} ex/s"
-        )
-
-    torch_xla.sync()
-
-    total_seconds = time.perf_counter() - run_start
-    print(f"\nTraining finished in {total_seconds:.2f}s.")
-    print(f"Saving to {cfg.save_dir} ...")
-
-    model_cpu = model.cpu()
-    model_cpu.save_pretrained(cfg.save_dir, safe_serialization=True)
-    tokenizer.save_pretrained(cfg.save_dir)
-
-    print(f"Saved checkpoint: {cfg.save_dir}")
+    save_model_weights_checkpoint(
+        model=model,
+        tokenizer=tokenizer,
+        checkpoint_dir=SAVE_DIR,
+    )
+    print(f"[Final] saved_dir={SAVE_DIR} step={steps_per_epoch}/{steps_per_epoch}", flush=True)
 
 
 def main() -> None:
@@ -295,49 +273,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-```
-
-
-```txt
-Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
-WARNING:huggingface_hub.utils._http:Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
-
-tokenizer_config.json: 100%
- 25.0/25.0 [00:00<00:00, 4.28kB/s]
-sentencepiece.bpe.model: 100%
- 811k/811k [00:00<00:00, 3.33MB/s]
-tokenizer.json: 100%
- 1.40M/1.40M [00:00<00:00, 4.65MB/s]
-config.json: 100%
- 508/508 [00:00<00:00, 90.8kB/s]
-model.safetensors: 100%
- 445M/445M [00:03<00:00, 468MB/s]
-Loading weights: 100%
- 202/202 [00:00<00:00, 6150.90it/s]
-
-[transformers] CamembertForMaskedLM LOAD REPORT from: camembert-base
-Key                         | Status     |  | 
-----------------------------+------------+--+-
-roberta.pooler.dense.bias   | UNEXPECTED |  | 
-roberta.pooler.dense.weight | UNEXPECTED |  | 
-
-Notes:
-- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
-
-
-Model              : camembert-base
-Device             : xla:0
-Epochs             : 1
-Batch size         : 248
-Seq length         : 128
-Train examples     : 4,484,103
-Steps / epoch      : 18,081
-Total steps        : 18,081
-Workers            : 16
-Prefetch factor    : 8
-XLA prefetch       : loader=32, device=16, transfer=4
-AMP                : torch.autocast('xla', dtype=torch.bfloat16)
-
-/usr/local/lib/python3.12/dist-packages/jax/_src/cloud_tpu_init.py:86: UserWarning: Transparent hugepages are not enabled. TPU runtime startup and shutdown time should be significantly improved on TPU v5e and newer. If not already set, you may need to enable transparent hugepages in your VM image (sudo sh -c "echo always > /sys/kernel/mm/transparent_hugepage/enabled")
-  warnings.warn(
 ```
